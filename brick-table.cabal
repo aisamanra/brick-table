@@ -1,4 +1,4 @@
-name:             brick-extras-spreadsheet
+name:             brick-extras-table
 version:          0.1.0.0
 -- synopsis:
 -- description:
@@ -12,7 +12,7 @@ build-type:       Simple
 cabal-version:    >= 1.14
 
 library
-  exposed-modules:     Brick.Extras.Spreadsheet
+  exposed-modules:     Brick.Extras.Table
   hs-source-dirs:      src
   ghc-options:         -Wall
   build-depends:       base >=4.7 && <4.10
