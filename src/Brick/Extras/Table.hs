@@ -124,7 +124,7 @@ applyEvent ev tbl = case ev of
 -- | Represents the current focus: either a single element or a
 -- contiguous rectancle of focused cells from the table.
 data Focus e
-  = FocusElement e
+  = FocusElement (Int, Int) e
   | FocusRange (A.Array (Int, Int) e)
     deriving (Eq, Show)
 
@@ -133,7 +133,7 @@ getFocused :: Table e n -> Focus e
 getFocused Table
   { tableContents = cs
   , tableCurIndex = range@(lIdx, rIdx)
-  } | lIdx == rIdx = FocusElement (cs A.! lIdx)
+  } | lIdx == rIdx = FocusElement lIdx (cs A.! lIdx)
     | otherwise =
       FocusRange (A.array range [ (idx, cs A.! idx)
                                 | idx <- Ix.range range
