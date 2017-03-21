@@ -1,14 +1,18 @@
 module Brick.Extras.Table
 ( Table(..)
 , table
+, renderTable
+-- * Event Handlers
+, TableEvent(..)
 , handleTableEvent
 , handleTableEventArrowKeys
 , handleTableEventVimKeys
-, renderTable
-, getFocusedElement
-, setFocusedElement
+-- * Table manipulation helpers
+, Focus(..)
+, getFocused
+, modifyFocused
 , getElement
-, setElement
+, modifyElement
 ) where
 
 import qualified Brick as Brick
@@ -23,7 +27,7 @@ data Table e n = Table
   { tableContents :: A.Array (Int, Int) e
     -- ^ The array which represents the contents of the
     -- table. This always begins at index @(0,0)@.
-  , tableCurIndex :: (Int, Int)
+  , tableCurIndex :: ((Int, Int), (Int, Int))
     -- ^ The currently focused index
   , tableDraw     :: e -> Bool -> Brick.Widget n
     -- ^ The function the table uses to draw its contents. The
@@ -33,26 +37,31 @@ data Table e n = Table
     -- ^ The name of the table
   }
 
+type Idx = (Int, Int)
+type Range = (Idx, Idx)
+
 -- | Create a new table state with a single default value for
 -- all cells.
 table :: n
-            -- ^ The name of the table (must be unique)
-            -> (Int, Int)
-            -- ^ The @(width, height)@ of the desired table
-            -> (e -> Bool -> Brick.Widget n)
-            -- ^ The rendering function for contents of the
-            -- table. The boolean parameter will be 'True' if
-            -- the element is the currently focused element, and
-            -- 'False' otherwise.
-            -> e
-            -- ^ The default element with which to fill the table
-            -> Table e n
+      -- ^ The name of the table (must be unique)
+      -> (Int, Int)
+      -- ^ The @(width, height)@ of the desired table
+      -> (e -> Bool -> Brick.Widget n)
+      -- ^ The rendering function for contents of the
+      -- table. The boolean parameter will be 'True' if
+      -- the element is the currently focused element, and
+      -- 'False' otherwise.
+      -> e
+      -- ^ The default element with which to fill the table
+      -> Table e n
 table name (width, height) draw def = Table
   { tableContents = A.listArray bounds (repeat def)
-  , tableCurIndex = (0, 0)
+  , tableCurIndex = ((0, 0), (0, 0))
   , tableDraw     = draw
   , tableName     = name
   } where bounds = ((0, 0), (width-1, height-1))
+
+data Direction = L | R | U | D
 
 left, right, up, down :: (Int, Int) -> (Int, Int)
 left (x, y) = (x - 1, y)
@@ -60,12 +69,20 @@ right (x, y) = (x + 1, y)
 up (x, y) = (x, y - 1)
 down (x, y) = (x, y + 1)
 
-clamp :: (Int, Int) -> (Int, Int) -> (Int, Int)
-clamp (x, y) (maxX, maxY) = (go x maxX, go y maxY)
-  where go n maxN
-          | n < 0     = 0
-          | n > maxN  = maxN
-          | otherwise = n
+canMove :: Direction -> Idx -> Range -> Bool
+canMove L (_, _) ((x, _), _) = x > 0
+canMove R (m, _) (_, (x, _)) = x < m
+canMove U (_, _) ((_, y), _) = y > 0
+canMove D (_, m) (_, (_, y)) = y < m
+
+onFst :: (a -> b) -> (a, c) -> (b, c)
+onFst f (x, y) = (f x, y)
+
+onSnd :: (a -> b) -> (c, a) -> (c, b)
+onSnd f (x, y) = (x, f y)
+
+onBoth :: (a -> b) -> (a, a) -> (b, b)
+onBoth f (x, y) = (f x, f y)
 
 -- | A representation of UI events which can change a table's
 -- state.
@@ -74,21 +91,65 @@ data TableEvent
   | MoveRight
   | MoveUp
   | MoveDown
+  | ExpandLeft
+  | ExpandRight
+  | ExpandUp
+  | ExpandDown
+  | ContractLeft
+  | ContractRight
+  | ContractUp
+  | ContractDown
     deriving (Eq, Show)
 
--- | Extract the currently-focused element from a table.
-getFocusedElement :: Table e n -> e
-getFocusedElement Table
-  { tableContents = cs
-  , tableCurIndex = idx
-  } = cs A.! idx
+applyEvent :: TableEvent -> Table e n -> Table e n
+applyEvent ev tbl = case ev of
+  MoveLeft      | canMove L mx idx -> go (onBoth left)
+  MoveRight     | canMove R mx idx -> go (onBoth right)
+  MoveUp        | canMove U mx idx -> go (onBoth up)
+  MoveDown      | canMove D mx idx -> go (onBoth down)
+  ExpandLeft    | canMove L mx idx -> go (onFst left)
+  ExpandRight   | canMove R mx idx -> go (onSnd right)
+  ExpandUp      | canMove U mx idx -> go (onFst up)
+  ExpandDown    | canMove D mx idx -> go (onSnd down)
+  ContractLeft  | lx < hx          -> go (onSnd left)
+  ContractRight | lx < hx          -> go (onFst right)
+  ContractUp    | ly < hy          -> go (onSnd up)
+  ContractDown  | ly < hy          -> go (onFst down)
+  _                                -> tbl
+  where mx   = snd (A.bounds (tableContents tbl))
+        idx  = tableCurIndex tbl
+        go f = tbl { tableCurIndex = f idx }
+        ((lx, ly), (hx, hy)) = idx
 
--- | Modify the element currenly focused in the table.
-setFocusedElement :: Table e n -> e -> Table e n
-setFocusedElement sp@Table
+-- | Represents the current focus: either a single element or a
+-- contiguous rectancle of focused cells from the table.
+data Focus e
+  = FocusElement e
+  | FocusRange (A.Array (Int, Int) e)
+    deriving (Eq, Show)
+
+-- | Extract the currently-focused element or elements from a table.
+getFocused :: Table e n -> Focus e
+getFocused Table
   { tableContents = cs
-  , tableCurIndex = idx
-  } new = sp { tableContents = cs A.// [(idx, new)] }
+  , tableCurIndex = range@(lIdx, rIdx)
+  } | lIdx == rIdx = FocusElement (cs A.! lIdx)
+    | otherwise =
+      FocusRange (A.array range [ (idx, cs A.! idx)
+                                | idx <- Ix.range range
+                                ])
+
+-- | Apply a function to the entire focused region. This function
+--   is passed the index of the cell as well as current value of
+--   the cell.
+modifyFocused :: Table e n -> ((Int, Int) -> e -> e) -> Table e n
+modifyFocused tbl@Table
+  { tableContents = cs
+  , tableCurIndex = range
+  } func = tbl { tableContents = cs A.// [ (idx, func idx (cs A.! idx))
+                                         | idx <- Ix.range range
+                                         ]
+               }
 
 -- | Extract an element at an arbitrary index from the
 -- table. This will return 'Nothing' if the index is outside the
@@ -101,10 +162,11 @@ getElement Table { tableContents = cs } idx
 -- | Modify an element at an abitrary index in the table. This
 -- will return the table unchanged if the index is outside the
 -- bounds of the table.
-setElement :: Table e n -> (Int, Int) -> e -> Table e n
-setElement sp@Table { tableContents = cs } idx new
+modifyElement :: Table e n -> (Int, Int) -> ((Int, Int) -> e -> e)
+              -> Table e n
+modifyElement sp@Table { tableContents = cs } idx func
   | A.bounds cs `Ix.inRange` idx =
-    sp { tableContents = cs A.// [(idx, new)] }
+    sp { tableContents = cs A.// [(idx, func idx (cs A.! idx))] }
   | otherwise = sp
 
 -- | Handle a "vty" event by moving the currently focused item in
@@ -133,22 +195,26 @@ handleTableEventVimKeys ev sp = case spEvent of
           Vty.EvKey (Vty.KChar 'j') [] -> Just MoveDown
           Vty.EvKey (Vty.KChar 'h') [] -> Just MoveLeft
           Vty.EvKey (Vty.KChar 'l') [] -> Just MoveRight
+          Vty.EvKey (Vty.KChar 'k') [Vty.MShift] -> Just ExpandUp
+          Vty.EvKey (Vty.KChar 'j') [Vty.MShift] -> Just ExpandDown
+          Vty.EvKey (Vty.KChar 'h') [Vty.MShift] -> Just ExpandLeft
+          Vty.EvKey (Vty.KChar 'l') [Vty.MShift] -> Just ExpandRight
+          Vty.EvKey (Vty.KChar 'K') [] -> Just ExpandUp
+          Vty.EvKey (Vty.KChar 'J') [] -> Just ExpandDown
+          Vty.EvKey (Vty.KChar 'H') [] -> Just ExpandLeft
+          Vty.EvKey (Vty.KChar 'L') [] -> Just ExpandRight
+          Vty.EvKey (Vty.KChar 'k') [Vty.MMeta] -> Just ContractUp
+          Vty.EvKey (Vty.KChar 'j') [Vty.MMeta] -> Just ContractDown
+          Vty.EvKey (Vty.KChar 'h') [Vty.MMeta] -> Just ContractLeft
+          Vty.EvKey (Vty.KChar 'l') [Vty.MMeta] -> Just ContractRight
           _                            -> Nothing
 
 -- | Handle a 'TableEvent' event by modifying the state of the
 -- table accordingly. This allows you to choose your own
 -- keybindings for events you want to handle.
 handleTableEvent :: TableEvent -> Table e n
-                       -> Brick.EventM n (Table e n)
-handleTableEvent e sp =
-  let (_, maxB) = A.bounds (tableContents sp)
-      curIndex = tableCurIndex sp
-      modify f = sp { tableCurIndex = clamp (f curIndex) maxB }
-  in return $ case e of
-    MoveUp    -> modify up
-    MoveDown  -> modify down
-    MoveLeft  -> modify left
-    MoveRight -> modify right
+                 -> Brick.EventM n (Table e n)
+handleTableEvent e sp = return (applyEvent e sp)
 
 -- | Render a table to a "brick" 'Widget'.
 renderTable :: Bool -> Table e n -> Brick.Widget n
@@ -159,7 +225,7 @@ renderTable spFocus sp =
          [ Brick.padLeft Brick.Max $ tableDraw sp item isFocus
          | y <- [0..maxY]
          , let item = tableContents sp A.! (x, y)
-               isFocus = spFocus && ((x, y) == tableCurIndex sp)
+               isFocus = spFocus && (tableCurIndex sp `Ix.inRange` (x, y))
          ]
        | x <- [0..maxX]
        ]
