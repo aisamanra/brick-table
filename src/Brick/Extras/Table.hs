@@ -2,6 +2,7 @@ module Brick.Extras.Table
 ( Table(..)
 , table
 , renderTable
+, renderTableWithStyle
 -- * Event Handlers
 , TableEvent(..)
 , handleTableEvent
@@ -16,6 +17,7 @@ module Brick.Extras.Table
 ) where
 
 import qualified Brick as Brick
+import qualified Brick.Widgets.Border.Style as Brick
 import qualified Data.Array as A
 import qualified Data.Ix as Ix
 import qualified Data.List as L
@@ -216,16 +218,41 @@ handleTableEvent :: TableEvent -> Table e n
                  -> Brick.EventM n (Table e n)
 handleTableEvent e sp = return (applyEvent e sp)
 
--- | Render a table to a "brick" 'Widget'.
+-- | Render a table to a "brick" 'Widget' using the default border
+-- style.
 renderTable :: Bool -> Table e n -> Brick.Widget n
 renderTable spFocus sp =
+  renderTableWithStyle spFocus sp Brick.defaultBorderStyle
+
+-- | Render a table to a "brick" 'Widget' using a custom border style.
+renderTableWithStyle :: Bool -> Table e n -> Brick.BorderStyle
+                     -> Brick.Widget n
+renderTableWithStyle spFocus sp bs =
   let (_, (maxX, maxY)) = A.bounds (tableContents sp)
-  in Brick.hBox $ L.intersperse (Brick.hLimit 1 (Brick.fill '│'))
-       [ Brick.vBox $ L.intersperse (Brick.vLimit 1 (Brick.fill '─'))
-         [ Brick.padLeft Brick.Max $ tableDraw sp item isFocus
-         | y <- [0..maxY]
-         , let item = tableContents sp A.! (x, y)
-               isFocus = spFocus && (tableCurIndex sp `Ix.inRange` (x, y))
-         ]
-       | x <- [0..maxX]
-       ]
+      vert = Brick.bsVertical bs
+      horz = Brick.bsHorizontal bs
+      horzDivider = Brick.vLimit 1 (Brick.fill horz)
+      vertDivider t b i = Brick.vBox $ [Brick.str [t]] ++ ls ++ [Brick.str [b]]
+        where ls = (take (2 * maxY + 1) (cycle [ Brick.str [vert]
+                                               , Brick.str [i]
+                                               ]))
+      cols x = L.intersperse horzDivider
+               [ Brick.padLeft Brick.Max $ tableDraw sp item isFocus
+               | y <- [0..maxY]
+               , let item = tableContents sp A.! (x, y)
+                     isFocus = spFocus && (tableCurIndex sp `Ix.inRange` (x, y))
+               ]
+      rows = L.intersperse
+               (vertDivider (Brick.bsIntersectT bs)
+                            (Brick.bsIntersectB bs)
+                            (Brick.bsIntersectFull bs))
+               [ Brick.vBox $ [horzDivider] ++ cols x ++ [horzDivider]
+               | x <- [0..maxX]
+               ]
+  in Brick.hBox $ [vertDivider (Brick.bsCornerTL bs)
+                               (Brick.bsCornerBL bs)
+                               (Brick.bsIntersectL bs)] ++
+                  rows ++
+                  [vertDivider (Brick.bsCornerTR bs)
+                               (Brick.bsCornerBR bs)
+                               (Brick.bsIntersectR bs)]
