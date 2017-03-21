@@ -30,7 +30,12 @@ data Table e n = Table
     -- ^ The array which represents the contents of the
     -- table. This always begins at index @(0,0)@.
   , tableCurIndex :: ((Int, Int), (Int, Int))
-    -- ^ The currently focused index
+    -- ^ The currently focused range of cells, of the form
+    -- @((minX, minY), (maxX, maxY))@. Be aware that this module maintains
+    -- the invariants that @minX <= minY && maxX <= maxY@, and that both
+    -- the min and max indices are within the range of the table. If
+    -- this value is modified without preserving that invariant, functions
+    -- in this module may produce anomalous results or even crash.
   , tableDraw     :: e -> Bool -> Brick.Widget n
     -- ^ The function the table uses to draw its contents. The
     -- boolean parameter will be 'True' if the element is the

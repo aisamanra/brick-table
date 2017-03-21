@@ -41,5 +41,5 @@ drawElem n False = Brick.str (show n)
 main :: IO ()
 main = do
   let tb = table () (10, 10) drawElem 0
-  _ <- Brick.customMain (Vty.mkVty mempty) (Nothing) app tb
+  _ <- Brick.defaultMain app tb
   return ()
